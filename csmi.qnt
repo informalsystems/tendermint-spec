@@ -190,6 +190,7 @@ module CSMIState {
     receive_message: ReceiveMessage[p, s, m, o],
     fire_timeout_event: FireTimeoutEvent[p, s, te, o],
     apply_effect: ApplyEffect[p, s, m, te, o, b],
+    byzantine_messages: Set[m],
     timeout_chance: int // between 0 and 100
   ): bool = any {
     all {
@@ -208,7 +209,14 @@ module CSMIState {
       // pick a process that has a message available in its buffer
       nondet v = oneOf(processes.filter(v => s.msgBuffer.get(v) != Set()))
       receive_some_msg(v, receive_message, apply_effect)
-    }
+    },
+    all {
+      byzantine_messages != Set(),
+      nondet msg = oneOf(byzantine_messages)
+      // Workaround weird effect bug if we don't use `s` here
+      nondet v = oneOf(processes.filter(v => s.msgBuffer.keys() != Set()))
+      s' = receive_one_message(s, v, msg, receive_message, apply_effect)
+    },
   }
 
   action step_no_timeout(

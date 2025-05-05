@@ -100,6 +100,7 @@ module tendermint {
     ({ ...s, received_prevotes: s.received_prevotes.setAdd(msg) })
       .and_then_state(on_prevote_quorum)
       .and_then(s => s.process_prevote_quorum_on_prevote_stage(msg))
+      .and_then(s => s.process_prevote_quorum_for_the_first_time(msg))
   }
 
   pure def process_precommit(s: LocalState, msg: PreVoteMsg): ConsensusResult = {
@@ -287,7 +288,6 @@ module tendermint {
         state: {
           ...s,
           found_quorum_for_round: s.found_quorum_for_round.set(s.round, true),
-          evidence_precommit: s.evidence_precommit.setAdd(s.received_precommits.filter(r => r.round == s.round)),
         },
         output: Set(StartTimeout({ kind: PreCommitTimeout, round: msg.round }))
       }
@@ -412,8 +412,31 @@ module tendermint {
     breakpoint: false,
   }
 
+  val byzantine_messages = {
+    val rounds = CSMI::s.system.values().map(s => s.round)
+    val byzantine_proposals = rounds.map(r => {
+      tuples(FAULTY, VALUES.values(), ROUNDS.setAdd(-1)).map(((f, v, vr)) => {
+        Propose({ src: f, round: r, proposal: v, valid_round: vr })
+      })
+    }).flatten()
+
+    val byzantine_prevotes = rounds.map(r => {
+      tuples(FAULTY, VALUES.values()).map(((f, v)) => {
+        PreVote({ src: f, round: r, id: Some(v) })
+      })
+    }).flatten()
+
+    val byzantine_precommits = rounds.map(r => {
+      tuples(FAULTY, VALUES.values()).map(((f, v)) => {
+        PreCommit({ src: f, round: r, id: Some(v) })
+      })
+    }).flatten()
+
+    Set(byzantine_proposals, byzantine_prevotes, byzantine_precommits).flatten()
+  }
+
   action init = CSMI::init(initialize_process, Set(initial_message), initial_bookkeeping)
-  action step = CSMI::step(receive_message, fire_timeout_event, apply_effect, 0)
+  action step = CSMI::step(receive_message, fire_timeout_event, apply_effect, byzantine_messages, 20)
 
   val breakpoint = not(CSMI::s.bookkeeping.breakpoint)
 
