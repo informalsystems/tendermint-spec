@@ -195,7 +195,7 @@ module CSMIState {
     all {
       nondet timeout_frequency_control = 1.to(100).oneOf()
       or {
-        s.msgBuffer.values().flatten() == Set(),
+        // s.msgBuffer.values().flatten() == Set(),
         timeout_frequency_control <= timeout_chance,
       },
       s.activeTimeouts.values().exists(t => t != None),
