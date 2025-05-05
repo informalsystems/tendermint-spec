@@ -1,3 +1,5 @@
+// -*- mode: Bluespec; -*-
+
 module tendermint {
   import CSMIBase as CSMI from "csmi"
   import CSMIBase.and_then from "csmi"
