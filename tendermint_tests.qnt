@@ -4,7 +4,6 @@ module tendermint_tests {
   import basicSpells.* from "basicSpells"
   import tendermint(
     F = 1,
-    NODES = Set("p1", "p2", "p3", "p4"),
     CORRECT = Set("p1", "p2", "p3"),
     FAULTY = Set("p4"),
     PROPOSER = Map(0 -> "p1", 1 -> "p2", 2 -> "p3", 3 -> "p4", 4 -> "p1"),
@@ -85,13 +84,13 @@ module tendermint_tests {
     // p2 receives PreVotes from p1 and p3, and a Byzantine PreVote from p4
     .then("p2".receive_prevote_from("p1"))
     .then("p2".receive_prevote_from("p3"))
-    .then("p2".receive_byzantine(PreVote({ src: "p4", round: 0, id: Some("v0") })))
+    .then("p2".receive_byzantine(PreVote({ src: "p4", round: 0, id: Some("v0".id()) })))
 
     // p2 has quorum
     .expect(CSMI::s.system.get("p2").received_prevotes == Set(
-      { src: "p1", round: 0, id: Some("v0") },
-      { src: "p3", round: 0, id: Some("v0") },
-      { src: "p4", round: 0, id: Some("v0") },
+      { src: "p1", round: 0, id: Some("v0".id()) },
+      { src: "p3", round: 0, id: Some("v0".id()) },
+      { src: "p4", round: 0, id: Some("v0".id()) },
     ))
 
     // so p2 starts a timeout
@@ -128,7 +127,7 @@ module tendermint_tests {
         current_state.stage == ProposeStage,
         result.state.stage == PreVoteStage,
         result.output.contains(
-          Broadcast(PreVote({ id: Some("v0"), round: 1, src: "p2" }))
+          Broadcast(PreVote({ round: 1, src: "p2", id: Some("v0".id()) }))
         ),
       }
     )

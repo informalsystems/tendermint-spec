@@ -11,6 +11,10 @@ module tendermint {
   type Round = int
   type Stage = ProposeStage | PreVoteStage | PreCommitStage | DecidedStage
   type Value = str
+  /// The ID of a value. In the implementation, this would be a hash of the value.
+  /// Here, we wrap it in a record and don't convert it back into a value.
+  /// This keeps the property that v1.id() == v2.id() iff v1 == v2.
+  type ValueId = { hashed: Value }
   type Node = str
 
   type State = {
@@ -38,7 +42,7 @@ module tendermint {
   type PreVoteMsg = {
     src: Node,
     round: Round,
-    id: Option[Value],
+    id: Option[ValueId],
   }
 
   type Message =
@@ -59,37 +63,50 @@ module tendermint {
     evidence_propose: Set[ProposeMsg],
     evidence_prevote: Set[PreVoteMsg],
     evidence_precommit: Set[PreVoteMsg],
+    // For debugging. See README.md#using-breakpoints
     breakpoint: bool,
   }
 
+  // Instantiate the CSMI types
   type LocalState = CSMI::LocalState[Node, State]
   type ConsensusResult = CSMI::ConsensusResult[LocalState, ConsensusOutput]
   type Environment = CSMI::Environment[Node, State, Message, TimeoutEvent, Bookkeeping]
 
-  const NODES: Set[Node]
+  /* CONSTANTS */
 
-  // An upper bound on the number of Byzantine processes
+  /// An upper bound on the number of Byzantine processes
   const F: int
+  /// The set of correct processes
   const CORRECT: Set[Node]
+  /// The set of faulty processes
   const FAULTY: Set[Node]
+  /// Which node is the proposer in each round
   const PROPOSER: Round -> Node
+  /// Which value is proposed in each round.
+  /// Values from rounds with correct nodes (in PROPOSER) are considered valid values.
   const VALUES: Round -> Value
 
+  /// The set of all nodes
+  pure val NODES = CORRECT.union(FAULTY)
+  /// The set of all rounds (prepared by the constants)
   pure val ROUNDS = VALUES.keys()
+  /// The set of all correct values (prepared by the constants)
   pure val VALID_VALUES = ROUNDS.filter(k => PROPOSER.get(k).in(CORRECT)).map(k => VALUES.get(k))
 
-  pure def get_prevotes(s: LocalState, round: Round, value: Option[Value]): Set[PreVoteMsg] =
-    s.received_prevotes.filter(v => v.round == round and v.id == value)
+  /// All received PreVotes with a given round and value id
+  pure def get_prevotes(s: LocalState, round: Round, id: Option[ValueId]): Set[PreVoteMsg] =
+    s.received_prevotes.filter(v => v.round == round and v.id == id)
 
-  pure def get_precommits(s: LocalState, round: Round, value: Value): Set[PreVoteMsg] =
-    s.received_precommits.filter(v => v.round == round and v.id == Some(value))
+  /// All received PreCommits with a given round and value id
+  pure def get_precommits(s: LocalState, round: Round, id: ValueId): Set[PreVoteMsg] =
+    s.received_precommits.filter(v => v.round == round and v.id == Some(id))
 
   pure def is_valid(v: Value): bool = {
     VALID_VALUES.contains(v)
   }
 
-  /// A value hash is modeled as identity
-  pure def id(v: Value): Value = v
+  /// A value hash in an abstract way.
+  pure def id(v: Value): ValueId = { hashed: v }
 
   pure def process_propose(s: LocalState, msg: ProposeMsg): ConsensusResult = {
     ({ ...s, received_proposals: s.received_proposals.setAdd(msg) })
@@ -424,13 +441,13 @@ module tendermint {
 
     val byzantine_prevotes = rounds.map(r => {
       tuples(FAULTY, VALUES.values()).map(((f, v)) => {
-        PreVote({ src: f, round: r, id: Some(v) })
+        PreVote({ src: f, round: r, id: Some(v.id()) })
       })
     }).flatten()
 
     val byzantine_precommits = rounds.map(r => {
       tuples(FAULTY, VALUES.values()).map(((f, v)) => {
-        PreCommit({ src: f, round: r, id: Some(v) })
+        PreCommit({ src: f, round: r, id: Some(v.id()) })
       })
     }).flatten()
 
