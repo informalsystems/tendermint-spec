@@ -132,3 +132,13 @@ module tendermint_tests {
       }
     )
 }
+
+module tendermint_faulty {
+  import tendermint(
+    F = 1,
+    CORRECT = Set("p1", "p2"),
+    FAULTY = Set("p3", "p4"),
+    PROPOSER = Map(0 -> "p1", 1 -> "p2", 2 -> "p3", 3 -> "p4", 4 -> "p1"),
+    VALUES =  Map(0 -> "v0", 1 -> "v1", 2 -> "v0", 3 -> "v2", 4 -> "v0"),
+  ).* from "tendermint"
+}

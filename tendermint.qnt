@@ -29,7 +29,8 @@ module tendermint {
     received_prevotes: Set[PreVoteMsg],
     received_precommits: Set[PreVoteMsg],
     after_prevote_for_first_time: bool,
-    found_quorum_for_round: Round -> bool,
+    prevote_quorum: bool,
+    precommit_quorum: bool,
   }
 
   type ProposeMsg = {
@@ -101,13 +102,22 @@ module tendermint {
   pure def get_precommits(s: LocalState, round: Round, id: ValueId): Set[PreVoteMsg] =
     s.received_precommits.filter(v => v.round == round and v.id == Some(id))
 
-  pure def is_valid(v: Value): bool = {
+  /// Whether a value is valid. From the paper: "In Tendermint, transaction
+  /// verification is the responsibility of the service that is being
+  /// replicated; upon receiving a transaction from the client, the Tendermint
+  /// process will ask the service if the request is valid, and only valid
+  /// requests will be processed."
+  pure def valid(v: Value): bool = {
     VALID_VALUES.contains(v)
   }
 
   /// A value hash in an abstract way.
   pure def id(v: Value): ValueId = { hashed: v }
 
+
+  /* MESSAGE HANDLING */
+
+  /// Operators to call when a propose message is received
   pure def process_propose(s: LocalState, msg: ProposeMsg): ConsensusResult = {
     ({ ...s, received_proposals: s.received_proposals.setAdd(msg) })
      .and_then_state(s => s.process_proposal_at_propose_stage(msg))
@@ -115,6 +125,7 @@ module tendermint {
      .and_then(s => s.process_proposal_and_quorum_after_prevote_stage_for_the_first_time(msg))
   }
 
+  /// Operators to call when a prevote message is received
   pure def process_prevote(s: LocalState, msg: PreVoteMsg): ConsensusResult = {
     ({ ...s, received_prevotes: s.received_prevotes.setAdd(msg) })
       .and_then_state(on_prevote_quorum)
@@ -122,11 +133,14 @@ module tendermint {
       .and_then(s => s.process_prevote_quorum_for_the_first_time(msg))
   }
 
+  /// Operators to call when a precommit message is received
   pure def process_precommit(s: LocalState, msg: PreVoteMsg): ConsensusResult = {
     ({ ...s, received_precommits: s.received_precommits.setAdd(msg) })
       .and_then_state(on_precommit_quorum)
   }
 
+  /// Operators to call when a prevote quorum is potentially reached (we just received a prevote message).
+  /// These operators take proposal as the argument, so we call them with each proposal the node ever received.
   pure def on_prevote_quorum(s: LocalState): ConsensusResult = {
     s.received_proposals.fold(CSMI::no_output(s), (acc, msg) => {
       acc
@@ -135,6 +149,8 @@ module tendermint {
     })
   }
 
+  /// Operators to call when a precommit quorum is potentially reached (we just received a precommit message).
+  /// These operators take proposal as the argument, so we call them with each proposal the node ever received.
   pure def on_precommit_quorum(s: LocalState): ConsensusResult = {
     s.received_proposals.fold(CSMI::no_output(s), (acc, msg) => {
       acc.and_then(s => s.process_proposal_and_precommit_quorum_but_no_decision(msg))
@@ -143,52 +159,55 @@ module tendermint {
 
   // line 11
   pure def start_round(s: LocalState, round: Round): ConsensusResult = {
-    pure val output = if (s.process_id == PROPOSER.get(round)) {
-      pure val proposal = if (s.valid_value != None) s.valid_value.unwrap() else VALUES.get(round)
-      Set(
-        Broadcast(
-          Propose({ src: s.process_id, round: round, proposal: proposal, valid_round: s.valid_round })
-        )
-      )
-    } else {
-      Set(StartTimeout({ kind: ProposeTimeout, round: s.round }))
-    }
+    ({
+      ...s,
+      round: round,
+      stage: ProposeStage,
+      prevote_quorum: false,
+      precommit_quorum: false,
+    }).and_then_state(s => {
+      pure val output =
+        if (s.process_id == PROPOSER.get(round)) {
+          pure val proposal =
+            if (s.valid_value != None)
+              s.valid_value.unwrap()
+            else
+              VALUES.get(round)
 
-    {
-      state: {
-        ...s,
-        round: round,
-        stage: ProposeStage,
-        found_quorum_for_round: s.found_quorum_for_round.put(round, false)
-      },
-      output: output,
-    }
+          Set(
+            Broadcast(
+              Propose({ src: s.process_id, round: s.round, proposal: proposal, valid_round: s.valid_round })
+            )
+          )
+        } else {
+          Set(StartTimeout({ kind: ProposeTimeout, round: s.round }))
+        }
+
+      { state: s, output: output }
+    })
   }
 
   // line 22
   pure def process_proposal_at_propose_stage(s: LocalState, msg: ProposeMsg): ConsensusResult = {
-    // upon <PROPOSAL, hp , roundp , v, −1>
-    if (msg.valid_round != -1) CSMI::no_output(s) else
-    // from proposer(hp, roundp)
-    if (msg.src != PROPOSER.get(s.round)) CSMI::no_output(s) else
-    // while stepp = propose
-    if (s.stage != ProposeStage) CSMI::no_output(s) else
+    pure val upon_condition = and {
+      // upon <PROPOSAL, hp , roundp , v, −1>
+      msg.valid_round == -1,
+      // from proposer(hp, roundp)
+      msg.src == PROPOSER.get(s.round),
+      // while stepp = propose
+      s.stage == ProposeStage,
+    }
+    if (not(upon_condition)) CSMI::no_output(s) else
 
-    pure val mid = if (msg.proposal.is_valid() and (s.locked_round == -1 or s.locked_value == msg.proposal))
-      Some(msg.proposal.id())
-    else
-      None
+    pure val broadcast =
+      if (msg.proposal.valid() and (s.locked_round == -1 or s.locked_value == msg.proposal))
+        Broadcast(PreVote({ src: s.process_id, round: s.round, id: Some(msg.proposal.id()) }))
+      else
+        Broadcast(PreVote({ src: s.process_id, round: s.round, id: None }))
 
     {
-      state: {
-        ...s,
-        stage: PreVoteStage,
-        after_prevote_for_first_time: true,
-      },
-      output: Set(
-        Broadcast(PreVote({ src: s.process_id, round: s.round, id: mid })),
-        CollectEvidence(Propose(msg)),
-      )
+      state: { ...s, stage: PreVoteStage, after_prevote_for_first_time: true },
+      output: Set(broadcast, CollectEvidence(Propose(msg)))
     }
   }
 
@@ -197,104 +216,110 @@ module tendermint {
     s: LocalState,
     msg: ProposeMsg,
   ): ConsensusResult = {
-    // upon <PROPOSAL, hp , roundp , v, vr>
-
-    // from proposer(hp, roundp)
-    if (msg.src != PROPOSER.get(s.round)) CSMI::no_output(s) else
-    // AND 2f + 1 <PREVOTE, hp , vr, id(v)>
     pure val prevotes = s.get_prevotes(msg.valid_round, Some(msg.proposal.id()))
-    if (prevotes.size() < 2 * F + 1) CSMI::no_output(s) else
-    // while stepp = propose
-    if (s.stage != ProposeStage) CSMI::no_output(s) else
-    // ∧ (vr ≥ 0 ∧ vr < roundp )
-    if (msg.valid_round < 0 or msg.valid_round >= s.round) CSMI::no_output(s) else
 
-    pure val mid = if (msg.proposal.is_valid() and
-        (s.locked_round <= msg.valid_round or s.locked_value == msg.proposal))
-      Some(msg.proposal.id())
-    else
-      None
+    pure val upon_condition = and {
+      // upon <PROPOSAL, hp , roundp , v, vr>
+      // from proposer(hp, roundp)
+      msg.src == PROPOSER.get(s.round),
+      // AND 2f + 1 <PREVOTE, hp , vr, id(v)>
+      prevotes.size() >= 2 * F + 1,
+      // while stepp = propose
+      s.stage == ProposeStage,
+      // ∧ (vr ≥ 0 ∧ vr < roundp)
+      msg.valid_round >= 0 and msg.valid_round < s.round,
+    }
+    if (not(upon_condition)) CSMI::no_output(s) else
+
+    pure val broadcast =
+      if (msg.proposal.valid() and (s.locked_round <= msg.valid_round or s.locked_value == msg.proposal))
+        Broadcast(PreVote({ src: s.process_id, round: s.round, id: Some(msg.proposal.id()) }))
+      else
+        Broadcast(PreVote({ src: s.process_id, round: s.round, id: None }))
 
     {
-      state: {
-        ...s,
-        stage: PreVoteStage,
-        after_prevote_for_first_time: true,
-      },
-      output: Set(
-        Broadcast(PreVote({ src: s.process_id, round: s.round, id: mid })),
-        CollectEvidence(Propose(msg)),
-        Breakpoint,
-      ).union(prevotes.map(m => CollectEvidence(PreVote(m))))
+      state: { ...s, stage: PreVoteStage, after_prevote_for_first_time: true },
+      output: Set(broadcast, CollectEvidence(Propose(msg)), Breakpoint)
+        .union(prevotes.map(m => CollectEvidence(PreVote(m))))
     }
   }
 
   // line 34
   pure def process_prevote_quorum_on_prevote_stage(s: LocalState, msg: PreVoteMsg): ConsensusResult = {
     pure val prevotes = s.received_prevotes.filter(r => r.round == s.round)
-    if (prevotes.size() >= 2 * F + 1 and s.after_prevote_for_first_time) {
-      {
-        state: {
-          ...s,
-          after_prevote_for_first_time: false,
-        },
-        output: Set(StartTimeout({ kind: PreVoteTimeout, round: msg.round }))
-          .union(prevotes.map(m => CollectEvidence(PreVote(m))))
-      }
-    } else {
-      CSMI::no_output(s)
+
+    pure val upon_condition = and {
+      // upon 2f + 1 <PREVOTE, hp , roundp , ∗>
+      prevotes.size() >= 2 * F + 1,
+      // while stepp = prevote for the first time
+      s.stage == PreVoteStage and s.after_prevote_for_first_time,
+    }
+    if (not(upon_condition)) CSMI::no_output(s) else
+
+    {
+      state: { ...s, after_prevote_for_first_time: false },
+      output: Set(StartTimeout({ kind: PreVoteTimeout, round: msg.round }))
+        .union(prevotes.map(m => CollectEvidence(PreVote(m))))
     }
   }
 
   // line 36
   pure def process_proposal_and_quorum_after_prevote_stage_for_the_first_time(s: LocalState, msg: ProposeMsg): ConsensusResult = {
     pure val prevotes = s.get_prevotes(s.round, Some(msg.proposal.id()))
-    // TODO: for the first time
-    if (not(prevotes.size() >= 2 * F + 1
-         and msg.proposal.is_valid()
-         and msg.src == PROPOSER.get(s.round)
-         and s.stage.in(Set(PreVoteStage, PreCommitStage)))) CSMI::no_output(s) else
 
-    pure val evidence_output =
-      Set(CollectEvidence(Propose(msg)))
-        .union(prevotes.map(m => CollectEvidence(PreVote(m))))
-
-    if (s.stage == PreVoteStage) {
-      {
-        state: {
-          ...s,
-          locked_value: Some(msg.proposal),
-          locked_round: msg.round,
-          stage: PreCommitStage,
-          valid_value: Some(msg.proposal),
-          valid_round: msg.round,
-        },
-        output: evidence_output.setAdd(
-          Broadcast(PreCommit({ src: s.process_id, round: msg.round, id: Some(msg.proposal.id()) }))
-        )
-      }
-    } else {
-      {
-        state: {
-          ...s,
-          valid_value: Some(msg.proposal),
-          valid_round: msg.round,
-        },
-        output: evidence_output,
-      }
+    pure val upon_condition = and {
+      // upon <PROPOSAL, hp , roundp , v, ∗>
+      // from proposer(hp , roundp)
+      msg.src == PROPOSER.get(s.round),
+      // AND 2f + 1 <PREVOTE, hp , roundp , id(v)>
+      prevotes.size() >= 2 * F + 1,
+      // while valid(v) ∧ stepp ≥ prevote for the first time
+       s.stage.in(Set(PreVoteStage, PreCommitStage)) and s.after_prevote_for_first_time,
     }
+    if (not(upon_condition)) CSMI::no_output(s) else
+
+    pure val base_result = {
+      state: {
+        ...s,
+        valid_value: Some(msg.proposal),
+        valid_round: s.round,
+      },
+      output: Set(CollectEvidence(Propose(msg)))
+        .union(prevotes.map(m => CollectEvidence(PreVote(m))))
+    }
+
+    base_result.and_then(s => {
+      if (s.stage == PreVoteStage) {
+        {
+          state: {
+            ...s,
+            locked_value: Some(msg.proposal),
+            locked_round: msg.round,
+            stage: PreCommitStage,
+          },
+          output: Set(
+            Broadcast(PreCommit({ src: s.process_id, round: msg.round, id: Some(msg.proposal.id()) }))
+          )
+        }
+      } else {
+        CSMI::no_output(s)
+      }
+    })
   }
 
   // line 44
   pure def process_prevote_quorum_at_prevote_stage(s: LocalState, msg: PreVoteMsg): ConsensusResult = {
     pure val prevotes = s.get_prevotes(s.round, None)
-    if (not(prevotes.size() >= 2 * F + 1 and s.stage == PreVoteStage)) CSMI::no_output(s) else
+    pure val upon_condition = and {
+      // upon 2f + 1 <PREVOTE, hp , roundp , nil>
+      prevotes.size() >= 2 * F + 1,
+      // while stepp = prevote
+      s.stage == PreVoteStage,
+    }
+    if (not(upon_condition)) CSMI::no_output(s) else
 
     {
-      state: {
-        ...s,
-        stage: PreCommitStage,
-      },
+      state: { ...s, stage: PreCommitStage },
       output: Set(Broadcast(PreCommit({ src: s.process_id, round: msg.round, id: None })))
         .union(prevotes.map(m => CollectEvidence(PreVote(m))))
     }
@@ -302,27 +327,38 @@ module tendermint {
 
   // line 47
   pure def process_prevote_quorum_for_the_first_time(s: LocalState, msg: PreVoteMsg): ConsensusResult = {
-    if (s.received_prevotes.filter(r => r.round == s.round).size() >= 2 * F + 1 and not(s.found_quorum_for_round.get(s.round))) {
-      {
-        state: {
-          ...s,
-          found_quorum_for_round: s.found_quorum_for_round.set(s.round, true),
-        },
-        output: Set(StartTimeout({ kind: PreCommitTimeout, round: msg.round }))
-      }
-    } else {
-      CSMI::no_output(s)
+    pure val precommits = s.received_precommits.filter(r => r.round == s.round)
+
+    pure val upon_condition = and {
+      // upon 2f + 1 <PRECOMMIT, hp , roundp , ∗> for the first time
+      precommits.size() >= 2 * F + 1,
+      not(s.precommit_quorum),
+    }
+    if (not(upon_condition)) CSMI::no_output(s) else
+
+    {
+      state: { ...s, precommit_quorum: true },
+      output: Set(StartTimeout({ kind: PreCommitTimeout, round: msg.round }))
+        .union(precommits.map(m => CollectEvidence(PreCommit(m))))
     }
   }
 
   // line 49
   pure def process_proposal_and_precommit_quorum_but_no_decision(s: LocalState, msg: ProposeMsg): ConsensusResult = {
-    if (msg.src != PROPOSER.get(msg.round)) CSMI::no_output(s) else
-
     pure val precommits = s.get_precommits(msg.round, msg.proposal.id())
-    if (not(precommits.size() >= 2 * F + 1
-         and msg.proposal.is_valid()
-         and s.decision == None)) CSMI::no_output(s) else
+
+    pure val upon_condition = and {
+      // upon <PROPOSAL, hp , r, v, ∗>
+      // from proposer(hp , r)
+      msg.src == PROPOSER.get(msg.round),
+      // AND 2f + 1 <PRECOMMIT, hp , r, id(v)>
+      precommits.size() >= 2 * F + 1,
+      // while decisionp[hp] = nil
+      s.decision == None,
+    }
+    if (not(upon_condition)) CSMI::no_output(s) else
+
+    if (not(msg.proposal.valid())) CSMI::no_output(s) else
 
     {
       state: {
@@ -333,11 +369,13 @@ module tendermint {
         // height: s.height + 1
         // reset
       },
-      output: Set(CollectEvidence(Propose(msg))).union(precommits.map(m => CollectEvidence(PreCommit(m))))
+      output: Set(CollectEvidence(Propose(msg)))
+        .union(precommits.map(m => CollectEvidence(PreCommit(m))))
       // Send start round msg to reset
     }
   }
 
+  /* CSMI DEFINITIONS */
 
   pure def initialize_process(n: Node): LocalState = {
     {
@@ -353,7 +391,8 @@ module tendermint {
       received_precommits: Set(),
       received_proposals: Set(),
       after_prevote_for_first_time: false,
-      found_quorum_for_round: Map(0 -> false),
+      prevote_quorum: false,
+      precommit_quorum: false,
     }
   }
 
@@ -457,8 +496,6 @@ module tendermint {
   action init = CSMI::init(initialize_process, Set(initial_message), initial_bookkeeping)
   action step = CSMI::step(receive_message, fire_timeout_event, apply_effect, byzantine_messages, 20)
 
-  val breakpoint = not(CSMI::s.bookkeeping.breakpoint)
-
   /* FORK SCENARIOS */
 
   pure def equivocation_in(n: Node, evidence: Set[{ src: Node, round: Round | other }]): bool = {
@@ -503,13 +540,17 @@ module tendermint {
   /// Sanity check for decisions
   val no_decision = CSMI::s.system.values().exists(v => v.decision == None)
 
+  /// Invariant for debugging. See README.md#using-breakpoints
+  val breakpoint = not(CSMI::s.bookkeeping.breakpoint)
+
   val correct_nodes = CSMI::s.system.values().filter(s => s.process_id.in(CORRECT))
 
-  /// Agreement (safety)
+  /// Agreement: no two correct full nodes decide differently.
   val agreement = tuples(correct_nodes, correct_nodes).forall(((p1, p2)) => {
     p1.decision == None or p2.decision == None or p1.decision == p2.decision
   })
 
+  /// Validity: the decided block satisfies the predefined predicate valid().
   val validity = correct_nodes.forall(s => s.decision.in(VALID_VALUES.map(v => Some(v)).setAdd(None)))
 
   /// The protocol safety. Two cases are possible:
