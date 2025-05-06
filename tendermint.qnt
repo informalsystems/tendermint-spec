@@ -130,7 +130,7 @@ module tendermint {
       pure val proposal = if (s.valid_value != None) s.valid_value.unwrap() else VALUES.get(round)
       Set(
         Broadcast(
-          Propose({ src: s.process_id, round: s.round, proposal: proposal, valid_round: s.valid_round })
+          Propose({ src: s.process_id, round: round, proposal: proposal, valid_round: s.valid_round })
         )
       )
     } else {
@@ -505,19 +505,4 @@ module tendermint {
       f.forall(n => equivocation_by(n) or amnesia_by(n)),
     })
   }
-
-  /* TESTS */
-
-  run line28Test = init
-}
-
-module tendermint_valid {
-  import tendermint(
-    F = 1,
-    NODES = Set("p1", "p2", "p3", "p4"),
-    CORRECT = Set("p1", "p2", "p3"),
-    FAULTY = Set("p4"),
-    PROPOSER = Map(0 -> "p1", 1 -> "p2", 2 -> "p3", 3 -> "p4", 4 -> "p1"),
-    VALUES =  Map(0 -> "v0", 1 -> "v1", 2 -> "v0", 3 -> "v2", 4 -> "v0"),
-  ).*
 }
