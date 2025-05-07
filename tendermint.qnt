@@ -1,12 +1,12 @@
 // -*- mode: Bluespec; -*-
 
 module tendermint {
-  import CSMIBase as CSMI from "csmi"
-  import CSMIBase.and_then from "csmi"
-  import CSMIBase.and_then_state from "csmi"
-  import CSMIState(processes = NODES) as CSMI from "csmi"
+  import CSMIBase as CSMI from "lib/csmi"
+  import CSMIBase.and_then from "lib/csmi"
+  import CSMIBase.and_then_state from "lib/csmi"
+  import CSMIState(processes = NODES) as CSMI from "lib/csmi"
 
-  import basicSpells.* from "basicSpells"
+  import basicSpells.* from "lib/basicSpells"
 
   type Round = int
   type Stage = ProposeStage | PreVoteStage | PreCommitStage | DecidedStage
