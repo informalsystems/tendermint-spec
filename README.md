@@ -48,6 +48,9 @@ Type ".exit" to exit, or ".help" for more information
 >>> line28Test
 true
 >>> CSMI::s
+// shows the current state
+>>> q::lastTrace
+// shows the entire trace
 ```
 
 To simply run the test, you can use:
@@ -61,7 +64,7 @@ $ quint test tendermint_tests.qnt
 Quint doesn't support breakpoints natively, but it is easy to improvise one. For this model, we added a `Breakpoint` output that will set the `breakpoint` field in `bookkeeping` to `true`. We then define an invariant stating that `bookkeeping.breakpoint` is never true, and run the Quint simulator with this invariant:
 
 ```sh
-$ quint run tendermint_tests.qnt --max-steps=50 --invariant="bookkeeping"
+$ quint run tendermint_tests.qnt --max-steps=50 --invariant=breakpoint
 ```
 
 Which should result in a violation with the trace up to the point where the breakpoint got triggered.
@@ -74,8 +77,9 @@ Quint REPL 0.24.0
 Type ".exit" to exit, or ".help" for more information
 >>> q::test(10000, 50, 1, init, step, breakpoint)
 false
+>>> CSMI::s
+// shows the current state
 >>> q::lastTrace
 // shows the entire trace
->>>
 ```
 
