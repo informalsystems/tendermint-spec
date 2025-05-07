@@ -77,32 +77,63 @@ module tendermint_tests {
 
   // p2 is the next proposer
   run line28Test = CSMI::init(initialize_process, Set(initial_message), initial_bookkeeping)
-    // p1 and p3 receive the proposal, but not p2
+    // Both p1 and p2 receive the initial proposal
     .then("p1".receive_proposal_from("p1"))
-    .then("p3".receive_proposal_from("p1"))
+    .then("p2".receive_proposal_from("p1"))
 
-    // p2 receives PreVotes from p1 and p3, and a Byzantine PreVote from p4
+    // p1 receives prevotes from p1 and p2, and a byzantine prevote from p4
+    .then("p1".receive_prevote_from("p1"))
+    .then("p1".receive_prevote_from("p2"))
+    .then("p1".receive_byzantine(PreVote({ src: "p4", round: 0, id: Some("v0".id()) })))
+
+    // p1 has prevote quorum
+    .expect(CSMI::s.system.get("p1").received_prevotes == Set(
+      { src: "p1", round: 0, id: Some("v0".id()) },
+      { src: "p2", round: 0, id: Some("v0".id()) },
+      { src: "p4", round: 0, id: Some("v0".id()) },
+    ))
+
+    // And therefore sends a precommit
+    .expect(CSMI::s.msgBuffer.values().forall(msgs => msgs.contains(
+      PreCommit({ src: "p1", round: 0, id: Some("v0".id()) })
+    )))
+
+    // The same happens for p2
+    // p2 receives prevotes from p1 and p2, and a byzantine prevote from p4
     .then("p2".receive_prevote_from("p1"))
-    .then("p2".receive_prevote_from("p3"))
+    .then("p2".receive_prevote_from("p2"))
     .then("p2".receive_byzantine(PreVote({ src: "p4", round: 0, id: Some("v0".id()) })))
 
-    // p2 has quorum
+    // p2 has prevote quorum
     .expect(CSMI::s.system.get("p2").received_prevotes == Set(
       { src: "p1", round: 0, id: Some("v0".id()) },
-      { src: "p3", round: 0, id: Some("v0".id()) },
+      { src: "p2", round: 0, id: Some("v0".id()) },
       { src: "p4", round: 0, id: Some("v0".id()) },
+    ))
+
+    // And therefore sends a precommit
+    .expect(CSMI::s.msgBuffer.values().forall(msgs => msgs.contains(
+      PreCommit({ src: "p2", round: 0, id: Some("v0".id()) })
+    )))
+
+    // We already check we have two precommits in flight, let's receive them
+
+    // p2 receives precommits from p1 and p2, and a byzantine precommit from p4
+    .then("p2".receive_precommit_from("p1"))
+    .then("p2".receive_precommit_from("p2"))
+    .then("p2".receive_byzantine(PreCommit({ src: "p4", round: 0, id: Some("v2".id()) })))
+
+    // p2 has precommit quorum
+    .expect(CSMI::s.system.get("p2").received_precommits == Set(
+      { src: "p1", round: 0, id: Some("v0".id()) },
+      { src: "p2", round: 0, id: Some("v0".id()) },
+      { src: "p4", round: 0, id: Some("v2".id()) },
     ))
 
     // so p2 starts a timeout
     .expect(CSMI::s.activeTimeouts.get("p2") == Some({ kind: PreCommitTimeout, round: 0 }))
 
-    // Important: up to this point, p2 has not received the proposal, and is still in the propose stage
-    .expect(CSMI::s.system.get("p2").received_proposals == Set())
-    .expect(CSMI::s.system.get("p2").stage == ProposeStage)
-
-    // Now p2 receives the proposal
-    .then("p2".receive_proposal_from("p1"))
-    // As a consequence, p2 stores the valid value
+    // and stores the valid value
     .expect(CSMI::s.system.get("p2").valid_value == Some("v0"))
 
     // At this point, if the timeout expires
@@ -116,7 +147,8 @@ module tendermint_tests {
       )),
     })
 
-    // Which enables line 28 to be called by p2
+    // Which enables line 28 to be called by p2, as it is in propose stage and can receive
+    // the new proposal with valid_round 0.
     // TODO: we might need more steps so this can also be called by different processes
     .expect(
       val current_state = CSMI::s.system.get("p2")

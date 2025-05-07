@@ -130,13 +130,13 @@ module tendermint {
     ({ ...s, received_prevotes: s.received_prevotes.setAdd(msg) })
       .and_then_state(on_prevote_quorum)
       .and_then(s => s.process_prevote_quorum_on_prevote_stage(msg))
-      .and_then(s => s.process_prevote_quorum_for_the_first_time(msg))
   }
 
   /// Operators to call when a precommit message is received
   pure def process_precommit(s: LocalState, msg: PreVoteMsg): ConsensusResult = {
     ({ ...s, received_precommits: s.received_precommits.setAdd(msg) })
       .and_then_state(on_precommit_quorum)
+      .and_then(s => s.process_precommit_quorum_for_the_first_time(msg))
   }
 
   /// Operators to call when a prevote quorum is potentially reached (we just received a prevote message).
@@ -223,7 +223,7 @@ module tendermint {
       // from proposer(hp, roundp)
       msg.src == PROPOSER.get(s.round),
       // AND 2f + 1 <PREVOTE, hp , vr, id(v)>
-      prevotes.size() >= 2 * F + 1,
+      prevotes.map(m => m.src).size() >= 2 * F + 1,
       // while stepp = propose
       s.stage == ProposeStage,
       // ∧ (vr ≥ 0 ∧ vr < roundp)
@@ -250,7 +250,7 @@ module tendermint {
 
     pure val upon_condition = and {
       // upon 2f + 1 <PREVOTE, hp , roundp , ∗>
-      prevotes.size() >= 2 * F + 1,
+      prevotes.map(m => m.src).size() >= 2 * F + 1,
       // while stepp = prevote for the first time
       s.stage == PreVoteStage and s.after_prevote_for_first_time,
     }
@@ -272,7 +272,7 @@ module tendermint {
       // from proposer(hp , roundp)
       msg.src == PROPOSER.get(s.round),
       // AND 2f + 1 <PREVOTE, hp , roundp , id(v)>
-      prevotes.size() >= 2 * F + 1,
+      prevotes.map(m => m.src).size() >= 2 * F + 1,
       // while valid(v) ∧ stepp ≥ prevote for the first time
        s.stage.in(Set(PreVoteStage, PreCommitStage)) and s.after_prevote_for_first_time,
     }
@@ -312,7 +312,7 @@ module tendermint {
     pure val prevotes = s.get_prevotes(s.round, None)
     pure val upon_condition = and {
       // upon 2f + 1 <PREVOTE, hp , roundp , nil>
-      prevotes.size() >= 2 * F + 1,
+      prevotes.map(m => m.src).size() >= 2 * F + 1,
       // while stepp = prevote
       s.stage == PreVoteStage,
     }
@@ -326,12 +326,12 @@ module tendermint {
   }
 
   // line 47
-  pure def process_prevote_quorum_for_the_first_time(s: LocalState, msg: PreVoteMsg): ConsensusResult = {
+  pure def process_precommit_quorum_for_the_first_time(s: LocalState, msg: PreVoteMsg): ConsensusResult = {
     pure val precommits = s.received_precommits.filter(r => r.round == s.round)
 
     pure val upon_condition = and {
       // upon 2f + 1 <PRECOMMIT, hp , roundp , ∗> for the first time
-      precommits.size() >= 2 * F + 1,
+      precommits.map(m => m.src).size() >= 2 * F + 1,
       not(s.precommit_quorum),
     }
     if (not(upon_condition)) CSMI::no_output(s) else
@@ -352,7 +352,7 @@ module tendermint {
       // from proposer(hp , r)
       msg.src == PROPOSER.get(msg.round),
       // AND 2f + 1 <PRECOMMIT, hp , r, id(v)>
-      precommits.size() >= 2 * F + 1,
+      precommits.map(m => m.src).size() >= 2 * F + 1,
       // while decisionp[hp] = nil
       s.decision == None,
     }
