@@ -1,17 +1,10 @@
 // -*- mode: Bluespec; -*-
 
-module tendermint_tests {
+module test_base {
   import basicSpells.* from "lib/basicSpells"
-  import tendermint(
-    F = 1,
-    CORRECT = Set("p1", "p2", "p3"),
-    FAULTY = Set("p4"),
-    PROPOSER = Map(0 -> "p1", 1 -> "p2", 2 -> "p3", 3 -> "p4", 4 -> "p1"),
-    VALUES =  Map(0 -> "v0", 1 -> "v1", 2 -> "v0", 3 -> "v2", 4 -> "v0"),
-  ).* from "tendermint"
+  import tendermint.* from "tendermint"
+  import CSMIBase as CSMI from "lib/csmi"
   import CSMIState(processes = Set("p1", "p2", "p3", "p4")) as CSMI from "lib/csmi"
-
-  /* HELPERS */
 
   pure def is_propose(m: Message): bool = {
     match m {
@@ -76,7 +69,7 @@ module tendermint_tests {
   /* TESTS */
 
   // p2 is the next proposer
-  run line28Test = CSMI::init(initialize_process, Set(initial_message), initial_bookkeeping)
+  run line28 = CSMI::init(initialize_process, Set(initial_message), initial_bookkeeping)
     // Both p1 and p2 receive the initial proposal
     .then("p1".receive_proposal_from("p1"))
     .then("p2".receive_proposal_from("p1"))
@@ -163,14 +156,108 @@ module tendermint_tests {
         ),
       }
     )
+
+  // p3 (faulty) is the first proposer
+  run disagreement = CSMI::init(initialize_process, Set(), initial_bookkeeping)
+    // p1 and p2 are the correct processes. Each of them receives a proposal with a different value
+    .then("p1".receive_byzantine(Propose({ src: "p3", round: 0, proposal: "v0", valid_round: -1 })))
+    .then("p2".receive_byzantine(Propose({ src: "p3", round: 0, proposal: "v1", valid_round: -1 })))
+
+    // p1 and p2 will send their prevotes, but not receive messages from each other
+    .then("p1".receive_prevote_from("p1"))
+    .then("p2".receive_prevote_from("p2"))
+
+    // Interesting note: adding the following breaks this test. We don't get to disagreement
+    // if p1 and p2 exchange prevotes, but exchanging precommits is fine.
+    // .then("p1".receive_prevote_from("p2"))
+    // .then("p2".receive_prevote_from("p1"))
+
+    // but there are also byzantine prevotes
+    .then("p1".receive_byzantine(PreVote({ src: "p3", round: 0, id: Some("v0".id()) })))
+    .then("p1".receive_byzantine(PreVote({ src: "p4", round: 0, id: Some("v0".id()) })))
+    .then("p2".receive_byzantine(PreVote({ src: "p3", round: 0, id: Some("v1".id()) })))
+    .then("p2".receive_byzantine(PreVote({ src: "p4", round: 0, id: Some("v1".id()) })))
+
+    // p1 has prevote quorum for value v0
+    .expect(Set(
+      { src: "p1", round: 0, id: Some("v0".id()) },
+      { src: "p3", round: 0, id: Some("v0".id()) },
+      { src: "p4", round: 0, id: Some("v0".id()) },
+    ).subseteq(
+      CSMI::s.system.get("p1").received_prevotes
+    ))
+
+    // p2 has prevote quorum for value v1
+    .expect(Set(
+      { src: "p2", round: 0, id: Some("v1".id()) },
+      { src: "p3", round: 0, id: Some("v1".id()) },
+      { src: "p4", round: 0, id: Some("v1".id()) },
+    ).subseteq(
+      CSMI::s.system.get("p2").received_prevotes
+    ))
+
+    // p1 and p2 will send their precommits
+    .then("p1".receive_precommit_from("p1"))
+    .then("p1".receive_precommit_from("p2"))
+    .then("p2".receive_precommit_from("p1"))
+    .then("p2".receive_precommit_from("p2"))
+    // but there are also byzantine precommits
+    .then("p1".receive_byzantine(PreCommit({ src: "p3", round: 0, id: Some("v0".id()) })))
+    .then("p1".receive_byzantine(PreCommit({ src: "p4", round: 0, id: Some("v0".id()) })))
+    .then("p2".receive_byzantine(PreCommit({ src: "p3", round: 0, id: Some("v1".id()) })))
+    .then("p2".receive_byzantine(PreCommit({ src: "p4", round: 0, id: Some("v1".id()) })))
+
+    // p1 has precommit quorum for value v0
+    .expect(Set(
+      { src: "p1", round: 0, id: Some("v0".id()) },
+      { src: "p3", round: 0, id: Some("v0".id()) },
+      { src: "p4", round: 0, id: Some("v0".id()) },
+    ).subseteq(
+      CSMI::s.system.get("p1").received_precommits
+    ))
+
+    // p2 has precommit quorum for value v1
+    .expect(Set(
+      { src: "p2", round: 0, id: Some("v1".id()) },
+      { src: "p3", round: 0, id: Some("v1".id()) },
+      { src: "p4", round: 0, id: Some("v1".id()) },
+    ).subseteq(
+      CSMI::s.system.get("p2").received_precommits
+    ))
+
+    // So they decide and disagree
+    .expect(and {
+      CSMI::s.system.get("p1").decision == Some("v0"),
+      CSMI::s.system.get("p2").decision == Some("v1"),
+    })
+
+    // And we can detect equivocation from p3 and p4 in the evidence
+    .expect(and {
+      equivocation_in("p3", CSMI::s.bookkeeping.evidence_prevote),
+      equivocation_in("p3", CSMI::s.bookkeeping.evidence_precommit),
+      equivocation_in("p4", CSMI::s.bookkeeping.evidence_prevote),
+      equivocation_in("p4", CSMI::s.bookkeeping.evidence_precommit),
+    })
 }
 
-module tendermint_faulty {
-  import tendermint(
+module tendermint_tests {
+  import test_base(
+    F = 1,
+    CORRECT = Set("p1", "p2", "p3"),
+    FAULTY = Set("p4"),
+    PROPOSER = Map(0 -> "p1", 1 -> "p2", 2 -> "p3", 3 -> "p4", 4 -> "p1"),
+    VALUES =  Map(0 -> "v0", 1 -> "v1", 2 -> "v0", 3 -> "v2", 4 -> "v0"),
+  ) as valid
+
+  run line28Test = valid::line28
+
+  import test_base(
     F = 1,
     CORRECT = Set("p1", "p2"),
     FAULTY = Set("p3", "p4"),
-    PROPOSER = Map(0 -> "p1", 1 -> "p2", 2 -> "p3", 3 -> "p4", 4 -> "p1"),
+    PROPOSER = Map(0 -> "p3", 1 -> "p2", 2 -> "p3", 3 -> "p4", 4 -> "p1"),
     VALUES =  Map(0 -> "v0", 1 -> "v1", 2 -> "v0", 3 -> "v2", 4 -> "v0"),
-  ).* from "tendermint"
+  ) as faulty
+
+  run disagreementTest = faulty::disagreement
 }

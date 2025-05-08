@@ -5,7 +5,7 @@
  *
  * A library to handle common patterns in consensus specifications
  *
- * Gabriela Moreira,  Josef Widder and Yassine Boukhari,
+ * Gabriela Moreira, Josef Widder and Yassine Boukhari,
  * Informal Systems, 2025
  */
 module CSMIBase {

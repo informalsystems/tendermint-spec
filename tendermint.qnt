@@ -29,7 +29,6 @@ module tendermint {
     received_prevotes: Set[PreVoteMsg],
     received_precommits: Set[PreVoteMsg],
     after_prevote_for_first_time: bool,
-    prevote_quorum: bool,
     precommit_quorum: bool,
   }
 
@@ -163,7 +162,6 @@ module tendermint {
       ...s,
       round: round,
       stage: ProposeStage,
-      prevote_quorum: false,
       precommit_quorum: false,
     }).and_then_state(s => {
       pure val output =
@@ -274,7 +272,7 @@ module tendermint {
       // AND 2f + 1 <PREVOTE, hp , roundp , id(v)>
       prevotes.map(m => m.src).size() >= 2 * F + 1,
       // while valid(v) ∧ stepp ≥ prevote for the first time
-       s.stage.in(Set(PreVoteStage, PreCommitStage)) and s.after_prevote_for_first_time,
+      s.stage.in(Set(PreVoteStage, PreCommitStage)) and s.after_prevote_for_first_time,
     }
     if (not(upon_condition)) CSMI::no_output(s) else
 
@@ -391,7 +389,6 @@ module tendermint {
       received_precommits: Set(),
       received_proposals: Set(),
       after_prevote_for_first_time: false,
-      prevote_quorum: false,
       precommit_quorum: false,
     }
   }
