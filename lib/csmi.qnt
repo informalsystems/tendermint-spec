@@ -143,6 +143,9 @@ module CSMIState {
   ): bool = {
     nondet res = env.system.get(v).receive_message(msg).oneOf()
     all {
+      // Pre-condition: only make a transition if the condition held true
+      // (that is, the "upon" condition - as `upon` will return None if the
+      // condition does not hold).
       res != None,
       s' = update_state(env, v, res.unwrap(), apply_effect)
     }

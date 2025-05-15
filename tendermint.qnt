@@ -233,18 +233,18 @@ module tendermint {
       }
 
    CSMI::upon(upon_condition, (a) => {
-      pure val broadcast =
-        if (msg.proposal.valid() and (s.locked_round <= msg.valid_round or s.locked_value == msg.proposal))
-          Broadcast(PreVote({ src: s.process_id, round: s.round, id: Some(msg.proposal.id()) }))
-        else
-          Broadcast(PreVote({ src: s.process_id, round: s.round, id: None }))
+     pure val broadcast =
+       if (msg.proposal.valid() and (s.locked_round <= msg.valid_round or s.locked_value == msg.proposal))
+         Broadcast(PreVote({ src: s.process_id, round: s.round, id: Some(msg.proposal.id()) }))
+       else
+         Broadcast(PreVote({ src: s.process_id, round: s.round, id: None }))
 
-      {
-        state: { ...s, stage: PreVoteStage, after_prevote_for_first_time: true },
-        output: Set(broadcast, CollectEvidence(Propose(msg)), Breakpoint)
-          .union(prevotes.map(m => CollectEvidence(PreVote(m))))
-      }
-    })
+     {
+       state: { ...s, stage: PreVoteStage, after_prevote_for_first_time: true },
+       output: Set(broadcast, CollectEvidence(Propose(msg)), Breakpoint)
+         .union(prevotes.map(m => CollectEvidence(PreVote(m))))
+     }
+   })
   }
 
   // line 34
@@ -433,6 +433,8 @@ module tendermint {
   }
 
   pure def receive_message(s: LocalState, m: Message): Set[UponResult] = {
+    // Set of potential transitions to do, with the conditions on when they can be done.
+    // CSMI will take care of selecting one that can be done.
     Set(
       process_proposal_at_propose_stage(s, m),
       process_proposal_and_quorum_at_propose_stage(s, m),
@@ -475,7 +477,7 @@ module tendermint {
 
   pure val TIMEOUT_ORDER = Map(ProposeTimeout -> 0, PreVoteTimeout -> 1, PreCommitTimeout -> 2)
   pure def should_replace(t1: TimeoutEvent, t2: TimeoutEvent): bool = {
-    // TODO: not sure about this
+    // TODO: this won't be needed once I update the CSMI lib with the sets of timeouts
     TIMEOUT_ORDER.get(t2.kind) < TIMEOUT_ORDER.get(t1.kind) or t2.round > t1.round
   }
 
