@@ -4,6 +4,12 @@ A Quint specification of Tendermint consensus, based on the
 [paper](https://arxiv.org/abs/1807.04938), using the Consensus State Machine
 Interface (CSMI) library.
 
+> [!WARNING]
+> CSMI is still under development, and we are pushing breaking changes frequently.
+
+> [!CAUTION]
+> This is not an official specification at this point, as it was not carefully analyzed nor peer reviewed yet.
+
 ## Model
 
 The model is reactive to messages. Transitions in the state machine are either a message being received or a timeout expiring. In Tendermint, the same message can trigger many "upon" events, and the paper states that it doesn't matter in which order they are processed, so we model an arbitrary order. Also, all reactions to a single message are done in one atomic step.
@@ -22,7 +28,7 @@ To check that they hold in with a small enough percentage of faulty nodes, run t
 $ quint run tendermint.qnt --main=tendermint_valid --max-steps=50 --invariant="agreement and validity and accountability"
 ```
 
-Accountability should also hold with a larger number of faulty nodes. In this case, agreement should not hold, but this happens under a very specific scenario that it's hard for the simulator to find. We describe that scenario with a test (see [Tests](#tests)).
+Accountability should also hold with a larger number of faulty nodes. In this case, agreement should not hold, but this happens under a very specific scenario that it's hard for the simulator to find. We describe that scenario with a test (see [Disagreement test](#disagreement-test)).
 
 ``` sh
 $ quint run tendermint.qnt --main=tendermint_faulty --max-steps=50 --invariant=accountability
