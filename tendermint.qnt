@@ -616,6 +616,7 @@ module tendermint_valid {
     VALUES =  Map(0 -> "v0", 1 -> "v1", 2 -> "v0", 3 -> "v2", 4 -> "v0"),
   ).*
 }
+
 module tendermint_faulty {
   import tendermint(
     F = 1,
