@@ -19,14 +19,13 @@ We define agreement, validity and accountability.
 To check that they hold in with a small enough percentage of faulty nodes, run the simulator:
 
 ``` sh
-$ quint run tendermint_tests.qnt --max-steps=50 --invariant="agreement and validity and accountability"
+$ quint run tendermint.qnt --main=tendermint_valid --max-steps=50 --invariant="agreement and validity and accountability"
 ```
 
-Accountability should also hold with a larger number of faulty nodes.
-*FIXME:* why doesn't agreement and validity break on more than 1/3 faulty nodes?
+Accountability should also hold with a larger number of faulty nodes. In this case, agreement should not hold, but this happens under a very specific scenario that it's hard for the simulator to find. We describe that scenario with a test (see [Tests](#tests)).
 
 ``` sh
-$ quint run tendermint_tests.qnt --max-steps=50 --invariant=accountability --main tendermint_faulty
+$ quint run tendermint.qnt --main=tendermint_faulty --max-steps=50 --invariant=accountability
 ```
 
 ### Liveness
@@ -39,13 +38,41 @@ $ quint run tendermint_tests.qnt --max-steps=50 --invariant=no_decision
 
 ## Tests
 
-In [`tendermint_tests.qnt`](./tendermint_tests.qnt) we have a test setup and one test case (for now) describing how we can reach specific scenarios. For now, we describe how we can get to a state where the "upon" statement from line 28 of the pseudocode is called, which requires a very specific setting and it is not obvious when it comes into play. The test should help a reader understand how that is possible, and loading that test in the REPL can enable them to explore the state further.
+In [`tendermint_tests.qnt`](./tendermint_tests.qnt) we have a test setup and two test cases (for now) describing how we can reach specific scenarios..
+
+### Line 28 test
+
+This test describes how we can get to a state where the "upon" statement from line 28 of the pseudocode is called, which requires a very specific setting and it is not obvious when it comes into play. The test should help a reader understand how that is possible, and loading that test in the REPL can enable them to explore the state further.
 
 ```sh
 $ quint -r tendermint_tests.qnt::tendermint_tests
 Quint REPL 0.24.0
 Type ".exit" to exit, or ".help" for more information
 >>> line28Test
+true
+>>> CSMI::s
+// shows the current state
+>>> q::lastTrace
+// shows the entire trace
+```
+
+To simply run the test, you can use:
+
+```sh
+$ quint test tendermint_tests.qnt
+```
+
+### Disagreement test
+
+This test describes how a high (> 1/3) number of byzantine nodes can cause the correct nodes to reach a decision where they disagree with each other. This can happen if one of the byzantine nodes is the proposer for the round, and proposes different values for different correct nodes, partitioning the system. Different byzantine nodes then send byzantine prevotes and precommits on those different values for their respective correct partitions, causing each partition to agree on the value that was initially proposed to them.
+
+See it in the REPL with:
+
+```sh
+$ quint -r tendermint_tests.qnt::tendermint_tests
+Quint REPL 0.24.0
+Type ".exit" to exit, or ".help" for more information
+>>> disagreementTest
 true
 >>> CSMI::s
 // shows the current state
