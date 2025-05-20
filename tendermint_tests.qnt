@@ -6,59 +6,32 @@ module test_base {
   import CSMIBase as CSMI from "lib/csmi"
   import CSMIState(processes = Set("p1", "p2", "p3", "p4")) as CSMI from "lib/csmi"
 
-  pure def is_propose(m: Message): bool = {
-    match m {
-      | Propose(_) => true
-      | _ => false
-    }
-  }
-
-  pure def to_propose(m: Message): Option[ProposeMsg] = {
-    match m {
-      | Propose(p) => Some(p)
-      | _ => None
-    }
-  }
-
-  pure def is_prevote(m: Message): bool = {
-    match m {
-      | PreVote(_) => true
-      | _ => false
-    }
-  }
-
-  pure def is_precommit(m: Message): bool = {
-    match m {
-      | PreCommit(_) => true
-      | _ => false
-    }
-  }
-
-  pure def is_from(m: Message, src: Node): bool = {
-    match m {
-      | Propose(p) => p.src == src
-      | PreVote(p) => p.src == src
-      | PreCommit(p) => p.src == src
-    }
-  }
+  /// All received PreVotes
+  pure def get_all_prevotes(s: LocalState): Set[PreVoteMsg] =
+    s.messages.filterMap(m => {
+      match m {
+        | PreVote(p) => Some(p)
+        | _ => None
+      }
+    })
 
   action receive_proposal_from(n: Node, src: Node): bool = {
-    val msg = CSMI::s.msgBuffer.get(n).filter(msg => msg.is_propose() and msg.is_from(src)).getOnlyElement()
-    CSMI::s' = CSMI::receive_one_message(CSMI::s, n, msg, receive_message, apply_effect)
+    val msg = CSMI::s.system.get(n).get_proposals().filter(msg => msg.src == src).getOnlyElement()
+    CSMI::receive_one_message(CSMI::s, n, Propose(msg), receive_message, apply_effect)
   }
 
   action receive_prevote_from(n: Node, src: Node): bool = {
-    val msg = CSMI::s.msgBuffer.get(n).filter(msg => msg.is_prevote() and msg.is_from(src)).getOnlyElement()
-    CSMI::s' = CSMI::receive_one_message(CSMI::s, n, msg, receive_message, apply_effect)
+    val msg = CSMI::s.system.get(n).get_all_prevotes().filter(msg => msg.src == src).getOnlyElement()
+    CSMI::receive_one_message(CSMI::s, n, PreVote(msg), receive_message, apply_effect)
   }
 
   action receive_precommit_from(n: Node, src: Node): bool = {
-    val msg = CSMI::s.msgBuffer.get(n).filter(msg => msg.is_precommit() and msg.is_from(src)).getOnlyElement()
-    CSMI::s' = CSMI::receive_one_message(CSMI::s, n, msg, receive_message, apply_effect)
+    val msg = CSMI::s.system.get(n).get_all_precommits().filter(msg => msg.src == src).getOnlyElement()
+    CSMI::receive_one_message(CSMI::s, n, PreCommit(msg), receive_message, apply_effect)
   }
 
   action receive_byzantine(n: Node, msg: Message): bool = {
-    CSMI::s' = CSMI::receive_one_message(CSMI::s, n, msg, receive_message, apply_effect)
+    CSMI::receive_one_message(CSMI::s, n, msg, receive_message, apply_effect)
   }
 
   action expire_timeout(n: Node): bool = {
@@ -69,14 +42,14 @@ module test_base {
   /* TESTS */
 
   // p2 is the next proposer
-  run line28 = CSMI::init(initialize_process, Set(initial_message), initial_bookkeeping)
+  run line28 = CSMI::init(initialize_process, initial_bookkeeping)
     // Both p1 and p2 receive the initial proposal
     .then("p1".receive_proposal_from("p1"))
     .then("p2".receive_proposal_from("p1"))
 
     // p1 receives prevotes from p1 and p2, and a byzantine prevote from p4
-    .then("p1".receive_prevote_from("p1"))
-    .then("p1".receive_prevote_from("p2"))
+    // .then("p1".receive_prevote_from("p1"))
+    // .then("p1".receive_prevote_from("p2"))
     .then("p1".receive_byzantine(PreVote({ src: "p4", round: 0, id: Some("v0".id()) })))
 
     // p1 has prevote quorum
@@ -87,7 +60,7 @@ module test_base {
     ))
 
     // And therefore sends a precommit
-    .expect(CSMI::s.msgBuffer.values().forall(msgs => msgs.contains(
+    .expect(CSMI::s.system.values().forall(s => s.messages.contains(
       PreCommit({ src: "p1", round: 0, id: Some("v0".id()) })
     )))
 
@@ -105,7 +78,7 @@ module test_base {
     ))
 
     // And therefore sends a precommit
-    .expect(CSMI::s.msgBuffer.values().forall(msgs => msgs.contains(
+    .expect(CSMI::s.system.values().forall(s => s.messages.contains(
       PreCommit({ src: "p2", round: 0, id: Some("v0".id()) })
     )))
 
@@ -135,7 +108,7 @@ module test_base {
     .expect(all {
       CSMI::s.system.get("p2").round == 1,
       CSMI::s.system.get("p2").stage == ProposeStage,
-      CSMI::s.msgBuffer.values().forall(msgs => msgs.contains(
+      CSMI::s.system.values().forall(s => s.messages.contains(
         Propose({ src: "p2", round: 1, proposal: "v0", valid_round: 0 })
       )),
     })
@@ -145,20 +118,21 @@ module test_base {
     // TODO: we might need more steps so this can also be called by different processes
     .expect(
       val current_state = CSMI::s.system.get("p2")
-      val msg = CSMI::s.msgBuffer.get("p2").filterMap(to_propose).getOnlyElement()
+      val msg = CSMI::s.system.get("p2").get_proposals().filter(p => p.valid_round == 0).getOnlyElement()
       // line 28
-      val result = current_state.process_proposal_and_quorum_at_propose_stage(msg)
+      val result = current_state.process_proposal_and_quorum_at_propose_stage(Propose(msg))
       all {
         current_state.stage == ProposeStage,
-        result.state.stage == PreVoteStage,
-        result.output.contains(
+        result != None,
+        result.unwrap().state.stage == PreVoteStage,
+        result.unwrap().output.contains(
           Broadcast(PreVote({ round: 1, src: "p2", id: Some("v0".id()) }))
         ),
       }
     )
 
   // p3 (faulty) is the first proposer
-  run disagreement = CSMI::init(initialize_process, Set(), initial_bookkeeping)
+  run disagreement = CSMI::init(initialize_process, initial_bookkeeping)
     // p1 and p2 are the correct processes. Each of them receives a proposal with a different value
     .then("p1".receive_byzantine(Propose({ src: "p3", round: 0, proposal: "v0", valid_round: -1 })))
     .then("p2".receive_byzantine(Propose({ src: "p3", round: 0, proposal: "v1", valid_round: -1 })))
